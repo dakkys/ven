@@ -4,7 +4,7 @@ const path = require("node:path");
 require("dotenv").config();
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 let browser;
 let context;
@@ -21,7 +21,7 @@ const ongoingRequests = new Map();
 
 async function initializeBrowser() {
   browser = await puppeteer.launch({
-    headless: false,
+    headless: process.env.HEADLESS === "true",
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",

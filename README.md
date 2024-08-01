@@ -24,13 +24,33 @@ This API provides an interface to interact with the Venice AI chatbot using Pupp
    pnpm install
    ```
 
-4. Create a `.env` file in the root directory with the following content:
-   ```
-   LOGIN_EMAIL=your_venice_ai_email
-   LOGIN_PASSWORD=your_venice_ai_password
-   MAX_TIMEOUT=60000
-   ```
-   Replace `your_venice_ai_email` and `your_venice_ai_password` with your account credentials.
+## Configuration
+
+   1. Rename the `.env.sample` file to `.env`:
+      ```
+      mv .env.sample .env
+      ```
+
+   2. Edit the `.env` file and fill in your Venice AI credentials and other settings:
+      ```
+      LOGIN_EMAIL=your_venice_ai_email
+      LOGIN_PASSWORD=your_venice_ai_password
+      MAX_TIMEOUT=60000
+      HEADLESS=false
+      PORT=3000
+      ```
+
+      - `LOGIN_EMAIL`: Your Venice AI account email
+      - `LOGIN_PASSWORD`: Your Venice AI account password
+      - `MAX_TIMEOUT`: Maximum timeout for navigation in milliseconds (default: 30000)
+      - `HEADLESS`: Set to "true" for headless browser mode, "false" for visible browser (default: false)
+      - `PORT`: The port on which the server will run (default: 3000)
+
+   Make sure to replace `your_venice_ai_email` and `your_venice_ai_password` with your actual Venice AI account credentials.
+
+   This update provides clear instructions on how to set up the environment variables, explains what each variable does, and mentions the option to simply rename the `.env.sample` file. It also includes the `HEADLESS` and `PORT` variables that are used in the updated code.
+
+   Regarding the diagnostic message you received, it appears to be a false positive or a linting error. The code you provided is syntactically correct. The semicolon after the ternary operator is appropriate in this context. You can safely ignore this particular diagnostic message.
 
 ## Usage
 
