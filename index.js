@@ -17,6 +17,7 @@ const NAVIGATION_TIMEOUT = process.env.MAX_TIMEOUT
   : 30000;
 
 const userDataDir = path.join(__dirname, "chrome-data");
+const ongoingRequests = new Map();
 
 async function initializeBrowser() {
   browser = await puppeteer.launch({
@@ -45,6 +46,10 @@ async function initializeBrowser() {
     ignoreDefaultArgs: ["--enable-automation"], // This can help bypass some popups
   });
 
+  const pages = await browser.pages();
+  if (pages.length > 0) {
+    await pages[0].close();
+  }
   context = browser.defaultBrowserContext();
   page = await context.newPage();
   page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT);
@@ -91,14 +96,52 @@ async function login() {
   console.log("Login successful");
 }
 
-async function createNewChatSession() {
+// Function to close inactive tabs
+function closeInactiveTab(page, chatId) {
+  setTimeout(
+    async () => {
+      try {
+        if (!page.isClosed()) {
+          console.log(`Closing inactive tab for chat ${chatId}`);
+          await page.close();
+        }
+      } catch (error) {
+        console.error(`Error closing tab for chat ${chatId}:`, error);
+      }
+    },
+    5 * 60 * 1000,
+  ); // 5 minutes
+}
+
+async function findOrCreateChatSession(contextId = null) {
+  const pages = await browser.pages();
+  let existingPage = null;
+
+  if (contextId) {
+    existingPage = pages.find((page) => {
+      const url = page.url();
+      return url.includes("/chat/") && url.endsWith(contextId);
+    });
+  }
+
+  if (existingPage) {
+    console.log(`[DEBUG] Found existing tab for chat ${contextId}`);
+    await existingPage.bringToFront();
+    return { chatId: contextId, page: existingPage };
+  }
+
+  console.log(`[DEBUG] Creating new tab for chat ${contextId || "new"}`);
   const newPage = await context.newPage();
 
   // Increase the navigation timeout
   const EXTENDED_TIMEOUT = 120000; // 2 minutes
   await newPage.setDefaultNavigationTimeout(EXTENDED_TIMEOUT);
+
   try {
-    await newPage.goto("https://venice.ai/chat", {
+    const url = contextId
+      ? `https://venice.ai/chat/${contextId}`
+      : "https://venice.ai/chat";
+    await newPage.goto(url, {
       waitUntil: "networkidle2",
       timeout: EXTENDED_TIMEOUT,
     });
@@ -107,64 +150,33 @@ async function createNewChatSession() {
     throw error;
   }
 
-  try {
-    await newPage.waitForSelector(
-      "body > div.css-wi1irr > div.css-6o8pp7 > div.css-135z2h5 > div > div > button:nth-child(1)",
-      {
+  if (!contextId) {
+    try {
+      await newPage.waitForSelector(
+        "body > div.css-wi1irr > div.css-6o8pp7 > div.css-135z2h5 > div > div > button:nth-child(1)",
+        {
+          timeout: EXTENDED_TIMEOUT,
+        },
+      );
+      await newPage.click(
+        "body > div.css-wi1irr > div.css-6o8pp7 > div.css-135z2h5 > div > div > button:nth-child(1)",
+      );
+      await newPage.waitForNavigation({
+        waitUntil: "networkidle2",
         timeout: EXTENDED_TIMEOUT,
-      },
-    );
-  } catch (error) {
-    console.error("[DEBUG] Error waiting for new chat button:", error);
-    throw error;
-  }
-
-  try {
-    await newPage.click(
-      "body > div.css-wi1irr > div.css-6o8pp7 > div.css-135z2h5 > div > div > button:nth-child(1)",
-    );
-  } catch (error) {
-    console.error("[DEBUG] Error clicking new chat button:", error);
-    throw error;
-  }
-
-  try {
-    await newPage.waitForNavigation({
-      waitUntil: "networkidle2",
-      timeout: EXTENDED_TIMEOUT,
-    });
-    console.log("[DEBUG] Navigation after clicking new chat button complete");
-  } catch (error) {
-    console.error(
-      "[DEBUG] Error during navigation after clicking new chat button:",
-      error,
-    );
-    throw error;
+      });
+    } catch (error) {
+      console.error("[DEBUG] Error creating new chat:", error);
+      throw error;
+    }
   }
 
   const chatId = new URL(newPage.url()).pathname.split("/").pop();
-  return { chatId, page: newPage };
-}
-
-async function openExistingChatSession(chatId) {
-  const newPage = await context.newPage();
-  await newPage.setViewport({
-    width: 1280,
-    height: 800,
-  });
-  await newPage.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT);
-
-  await newPage.goto(`https://venice.ai/chat/${chatId}`, {
-    waitUntil: "networkidle2",
-  });
-
+  closeInactiveTab(newPage, chatId);
   return { chatId, page: newPage };
 }
 
 async function sendPrompt(page, prompt) {
-  console.log("[DEBUG] Starting sendPrompt function");
-  console.log("[DEBUG] Prompt:", prompt);
-
   const textareaSelector = 'textarea[placeholder="Ask a question..."]';
   const sendButtonSelector = 'button[data-testid="chatInputSubmitButton"]';
 
@@ -211,35 +223,9 @@ async function sendPrompt(page, prompt) {
       timeout: NAVIGATION_TIMEOUT,
       visible: true,
     });
-    console.log("[DEBUG] Send button found and enabled");
 
-    console.log("[DEBUG] Clicking send button");
     await page.click(sendButtonSelector);
-    console.log("[DEBUG] Send button clicked");
-
-    console.log("[DEBUG] Waiting for XHR response");
-    const responseBody = await responsePromise;
-    console.log("[DEBUG] XHR response received");
-
-    console.log("[DEBUG] Raw response body:", responseBody);
-
-    // Process the streaming response
-    const responseChunks = responseBody
-      .split("\n")
-      .filter((chunk) => chunk.trim() !== "");
-    const lastChunk = responseChunks[responseChunks.length - 1];
-
-    let responseData;
-    try {
-      responseData = JSON.parse(lastChunk);
-      console.log(
-        "[DEBUG] Parsed response data:",
-        JSON.stringify(responseData, null, 2),
-      );
-    } catch (error) {
-      console.error("[DEBUG] Error parsing JSON from last chunk:", error);
-      console.log("[DEBUG] Last chunk:", lastChunk);
-    }
+    await responsePromise;
 
     console.log("[DEBUG] Waiting for assistant response in UI");
     await page.waitForSelector(".assistant", { timeout: NAVIGATION_TIMEOUT });
@@ -247,20 +233,21 @@ async function sendPrompt(page, prompt) {
 
     console.log("[DEBUG] Extracting response content");
     const responseContent = await page.evaluate(() => {
-      const assistantDiv = document.querySelector(".assistant");
-      if (!assistantDiv) {
-        console.log("[DEBUG] Assistant div not found");
+      const assistantDivs = document.querySelectorAll(".assistant");
+      if (assistantDivs.length === 0) {
+        console.log("[DEBUG] No assistant divs found");
         return null;
       }
 
-      const paragraphs = assistantDiv.querySelectorAll("p");
+      const lastAssistantDiv = assistantDivs[assistantDivs.length - 1];
+      const paragraphs = lastAssistantDiv.querySelectorAll("p");
       let markdown = "";
 
       for (const p of paragraphs) {
         markdown += `${p.textContent}\n\n`;
       }
 
-      const links = assistantDiv.querySelectorAll("a");
+      const links = lastAssistantDiv.querySelectorAll("a");
       if (links.length > 0) {
         markdown += "\nReferences:\n";
         links.forEach((link, index) => {
@@ -271,7 +258,7 @@ async function sendPrompt(page, prompt) {
       return markdown.trim();
     });
 
-    return { responseContent, rawResponse: responseData };
+    return responseContent;
   } catch (error) {
     console.error("[DEBUG] Error in sendPrompt:", error);
     console.error("[DEBUG] Error stack:", error.stack);
@@ -279,14 +266,20 @@ async function sendPrompt(page, prompt) {
   }
 }
 
+function cleanupOngoingRequests() {
+  const staleTimeout = 5 * 60 * 1000; // 5 minutes
+  for (const [chatId, timestamp] of ongoingRequests.entries()) {
+    if (Date.now() - timestamp > staleTimeout) {
+      console.log(`Pruning staled ongoing requests of ${chatId}`);
+      ongoingRequests.delete(chatId);
+    }
+  }
+}
+
 app.post("/chat", async (req, res) => {
-  console.log("[DEBUG] Received POST request to /chat");
   const { prompt, contextId } = req.body;
-  console.log("[DEBUG] Prompt:", prompt);
-  console.log("[DEBUG] ContextId:", contextId);
 
   if (!prompt) {
-    console.log("[DEBUG] No prompt provided");
     return res.status(400).send("No prompt provided");
   }
 
@@ -294,53 +287,53 @@ app.post("/chat", async (req, res) => {
     let chatId;
     let page;
 
-    console.log("[DEBUG] chatSessions size:", chatSessions.size);
-    logMapContents();
-
-    if (contextId && chatSessions.has(contextId)) {
-      console.log("[DEBUG] Resuming existing chat session");
-      logMapGet(contextId);
-      ({ chatId, page } = chatSessions.get(contextId));
-      console.log("[DEBUG] Existing chat session opened");
-    } else {
-      console.log("[DEBUG] Creating new chat session");
-      try {
-        ({ chatId, page } = await createNewChatSession());
-        console.log("[DEBUG] New chat session created successfully");
-      } catch (error) {
-        console.error("[DEBUG] Error creating new chat session:", error);
-        console.error("[DEBUG] Error stack:", error.stack);
-        return res.status(500).json({
-          error: "Failed to create new chat session",
-          details: error.message,
-          stack: error.stack,
-        });
-      }
+    console.log("[DEBUG] Finding or creating chat session");
+    try {
+      ({ chatId, page } = await findOrCreateChatSession(contextId));
+      console.log("[DEBUG] Chat session found or created successfully");
+    } catch (error) {
+      console.error("[DEBUG] Error finding or creating chat session:", error);
+      console.error("[DEBUG] Error stack:", error.stack);
+      return res.status(500).json({
+        error: "Failed to find or create chat session",
+        details: error.message,
+        stack: error.stack,
+      });
     }
 
-    console.log("[DEBUG] Attempting to set chat session in Map");
-    console.log("[DEBUG] chatId:", chatId);
-    console.log(
-      "[DEBUG] page:",
-      page ? "Page object exists" : "Page object is undefined",
-    );
-    logMapSet(chatId, page);
-    chatSessions.set(chatId, { chatId, page });
-    console.log("[DEBUG] Chat session set in Map");
-    logMapContents();
+    // Check if there's an ongoing request for this chatId
+    if (ongoingRequests.has(chatId)) {
+      console.log(`[DEBUG] Waiting for ongoing request for chat ${chatId}`);
+      const result = await ongoingRequests.get(chatId);
+      return res.json({ chatId, result });
+    }
 
-    console.log("[DEBUG] Calling sendPrompt");
-    const { responseContent, rawResponse } = await sendPrompt(page, prompt);
-    console.log("[DEBUG] sendPrompt completed");
+    // Create a new promise for this request
+    const requestPromise = new Promise((resolve, reject) => {
+      try {
+        console.log("[DEBUG] Calling sendPrompt");
+        resolve(sendPrompt(page, prompt));
+        console.log("[DEBUG] sendPrompt completed");
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    // Set the ongoing request
+    ongoingRequests.set(chatId, requestPromise);
+
+    // Wait for the request to complete
+    const result = await requestPromise;
+
+    // Remove the ongoing request marker
+    ongoingRequests.delete(chatId);
 
     console.log("[DEBUG] Sending response");
-    res.json({
-      chatId,
-      message: "Chat session created/resumed and prompt sent",
-      formattedResponse: responseContent,
-      rawResponse: rawResponse,
-    });
+    res.json({ chatId, result });
   } catch (error) {
+    // Remove the ongoing request marker in case of error
+    if (chatId) ongoingRequests.delete(chatId);
+
     console.error("[DEBUG] Error in /chat endpoint:", error);
     console.error("[DEBUG] Error stack:", error.stack);
     res.status(500).json({ error: error.message, stack: error.stack });
@@ -351,6 +344,7 @@ async function startServer() {
   await initializeBrowser().then(() => {
     app.listen(port, () => {
       console.log(`Server running at http://localhost:${port}`);
+      setInterval(cleanupOngoingRequests, 5 * 60 * 1000);
     });
   });
 }
