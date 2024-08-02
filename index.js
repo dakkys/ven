@@ -17,11 +17,11 @@ const NAVIGATION_TIMEOUT = process.env.MAX_TIMEOUT
   ? Number.parseInt(process.env.MAX_TIMEOUT, 10)
   : 30000;
 
-const userDataDir = path.join(__dirname, "chrome-data");
+const userDataDir = path.join(process.cwd(), "chrome-data");
 const ongoingRequests = new Map();
 
 async function initializeBrowser() {
-  browser = await puppeteer.launch({
+  const launchOptions = {
     headless: process.env.HEADLESS === "true",
     args: [
       "--no-sandbox",
@@ -45,17 +45,33 @@ async function initializeBrowser() {
       hasTouch: false,
     },
     ignoreDefaultArgs: ["--enable-automation"], // This can help bypass some popups
-  });
+  };
 
-  const pages = await browser.pages();
-  if (pages.length > 0) {
-    await pages[0].close();
+  // Check if running on Windows and EXECUTABLE_PATH is set
+  if (os.platform() === "win32" && process.env.EXECUTABLE_PATH) {
+    console.log(
+      `Running on Windows. Using custom executable path: ${process.env.EXECUTABLE_PATH}`,
+    );
+    launchOptions.executablePath = process.env.EXECUTABLE_PATH;
   }
-  context = browser.defaultBrowserContext();
-  page = await context.newPage();
-  page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT);
 
-  await ensureLoggedIn();
+  try {
+    browser = await puppeteer.launch(launchOptions);
+    console.log("Browser launched successfully");
+
+    const pages = await browser.pages();
+    if (pages.length > 0) {
+      await pages[0].close();
+    }
+    context = browser.defaultBrowserContext();
+    page = await context.newPage();
+    page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT);
+
+    await ensureLoggedIn();
+  } catch (error) {
+    console.error("Failed to launch browser:", error);
+    throw error;
+  }
 }
 
 async function ensureLoggedIn() {
