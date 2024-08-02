@@ -217,14 +217,22 @@ async function sendPrompt(page, prompt) {
     });
     console.log("[DEBUG] Textarea found");
 
+    console.log("[DEBUG] Focusing on textarea");
+    await page.focus(textareaSelector);
+
     console.log("[DEBUG] Clearing textarea");
     await page.evaluate((selector) => {
       document.querySelector(selector).value = "";
     }, textareaSelector);
 
     console.log("[DEBUG] Typing prompt into textarea");
-    await page.type(textareaSelector, prompt, { delay: 10 });
-    console.log("[DEBUG] Prompt typed into textarea");
+    const lines = prompt.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      await page.keyboard.type(lines[i]);
+      if (i < lines.length - 1) {
+        await page.keyboard.press("Enter");
+      }
+    }
 
     console.log("[DEBUG] Verifying entered text");
     const enteredText = await page.$eval(textareaSelector, (el) => el.value);
@@ -261,23 +269,59 @@ async function sendPrompt(page, prompt) {
     console.log("[DEBUG] Assistant response appeared in UI");
 
     console.log("[DEBUG] Extracting response content");
-    const responseContent = await page.evaluate(() => {
+    const { responseContent, references } = await page.evaluate(() => {
       const assistantDivs = document.querySelectorAll(".assistant");
       if (assistantDivs.length === 0) {
         console.log("[DEBUG] No assistant divs found");
-        return null;
+        return { responseContent: null, references: null };
       }
 
       const lastAssistantDiv = assistantDivs[assistantDivs.length - 1];
-      return lastAssistantDiv.innerHTML;
+
+      // Extract main response
+      const mainResponse = lastAssistantDiv.querySelector(".prose");
+
+      // Extract references
+      const referencesLinks = lastAssistantDiv.querySelector(".chakra-stack");
+
+      let referencesList = [];
+      if (referencesLinks) {
+        referencesList = Array.from(referencesLinks.querySelectorAll("a")).map(
+          (a) => {
+            return {
+              number: a.querySelector("sup").textContent,
+              text: a.querySelector(".chakra-text").textContent,
+              url: a.href,
+            };
+          },
+        );
+      }
+
+      return {
+        responseContent: mainResponse ? mainResponse.innerHTML : null,
+        references: referencesList,
+      };
     });
 
     console.log("[DEBUG] RESPONSE: ", responseContent);
+    console.log("[DEBUG] REFERENCES: ", references);
+
     // Convert HTML to Markdown
     const turndownService = new Turndown();
     const markdown = turndownService.turndown(responseContent);
+
+    // Convert references to markdown list
+    const referencesMarkdown = references
+      .map((ref) => `${ref.number}. [${ref.text}](${ref.url})`)
+      .join("\n");
+
     console.log("[DEBUG] markdown: ", markdown);
-    return markdown.trim();
+    console.log("[DEBUG] references markdown: ", referencesMarkdown);
+
+    return {
+      response: markdown.trim(),
+      references: referencesMarkdown,
+    };
   } catch (error) {
     console.error("[DEBUG] Error in sendPrompt:", error);
     console.error("[DEBUG] Error stack:", error.stack);
@@ -296,7 +340,7 @@ function cleanupOngoingRequests() {
 }
 
 app.post("/chat", async (req, res) => {
-  const { prompt, contextId } = req.body;
+  const { prompt, contextId, withRefs = false } = req.body;
 
   if (!prompt) {
     return res.status(400).send("No prompt provided");
@@ -342,13 +386,13 @@ app.post("/chat", async (req, res) => {
     ongoingRequests.set(chatId, requestPromise);
 
     // Wait for the request to complete
-    const result = await requestPromise;
-
+    const fullResult = await requestPromise;
+    const result = withRefs ? fullResult : { response: fullResult.response };
     // Remove the ongoing request marker
     ongoingRequests.delete(chatId);
 
     console.log("[DEBUG] Sending response");
-    res.json({ chatId, result });
+    res.json({ chatId, ...result });
   } catch (error) {
     // Remove the ongoing request marker in case of error
     if (chatId) ongoingRequests.delete(chatId);
