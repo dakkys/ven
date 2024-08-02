@@ -137,6 +137,8 @@ async function findOrCreateChatSession(contextId = null) {
   const EXTENDED_TIMEOUT = 120000; // 2 minutes
   await newPage.setDefaultNavigationTimeout(EXTENDED_TIMEOUT);
 
+  let shouldCreateNewChat = !contextId;
+
   try {
     const url = contextId
       ? `https://venice.ai/chat/${contextId}`
@@ -145,12 +147,21 @@ async function findOrCreateChatSession(contextId = null) {
       waitUntil: "networkidle2",
       timeout: EXTENDED_TIMEOUT,
     });
+
+    // Check if the URL has changed back to the main chat page
+    const currentUrl = newPage.url();
+    if (contextId && currentUrl === "https://venice.ai/chat") {
+      console.log(
+        `[DEBUG] Context ID ${contextId} not recognized, will create new chat`,
+      );
+      shouldCreateNewChat = true;
+    }
   } catch (error) {
-    console.error("[ERROR]", error);
+    console.error("[ERROR] Navigation failed:", error);
     throw error;
   }
 
-  if (!contextId) {
+  if (shouldCreateNewChat) {
     try {
       await newPage.waitForSelector(
         "body > div.css-wi1irr > div.css-6o8pp7 > div.css-135z2h5 > div > div > button:nth-child(1)",
@@ -283,10 +294,10 @@ app.post("/chat", async (req, res) => {
     return res.status(400).send("No prompt provided");
   }
 
-  try {
-    let chatId;
-    let page;
+  let chatId;
+  let page;
 
+  try {
     console.log("[DEBUG] Finding or creating chat session");
     try {
       ({ chatId, page } = await findOrCreateChatSession(contextId));
