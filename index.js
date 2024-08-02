@@ -1,6 +1,7 @@
 const express = require("express");
 const puppeteer = require("puppeteer");
 const path = require("node:path");
+const Turndown = require("turndown");
 require("dotenv").config();
 
 const app = express();
@@ -251,25 +252,15 @@ async function sendPrompt(page, prompt) {
       }
 
       const lastAssistantDiv = assistantDivs[assistantDivs.length - 1];
-      const paragraphs = lastAssistantDiv.querySelectorAll("p");
-      let markdown = "";
-
-      for (const p of paragraphs) {
-        markdown += `${p.textContent}\n\n`;
-      }
-
-      const links = lastAssistantDiv.querySelectorAll("a");
-      if (links.length > 0) {
-        markdown += "\nReferences:\n";
-        links.forEach((link, index) => {
-          markdown += `[${index + 1}]: ${link.href} "${link.textContent}"\n`;
-        });
-      }
-
-      return markdown.trim();
+      return lastAssistantDiv.innerHTML;
     });
 
-    return responseContent;
+    console.log("[DEBUG] RESPONSE: ", responseContent);
+    // Convert HTML to Markdown
+    const turndownService = new Turndown();
+    const markdown = turndownService.turndown(responseContent);
+    console.log("[DEBUG] markdown: ", markdown);
+    return markdown.trim();
   } catch (error) {
     console.error("[DEBUG] Error in sendPrompt:", error);
     console.error("[DEBUG] Error stack:", error.stack);
