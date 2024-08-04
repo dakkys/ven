@@ -59,15 +59,16 @@ async function initializeBrowser() {
   try {
     browser = await puppeteer.launch(launchOptions);
     console.log("Browser launched successfully");
-
+    
     const pages = await browser.pages();
-    if (pages.length > 0) {
-      await pages[0].close();
-    }
+    const pagesLength = pages.length; 
     context = browser.defaultBrowserContext();
     page = await context.newPage();
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT);
-
+    for(let i=0; i<pagesLength; i++){
+    // Close the initial tab and any previous browser tabs, but only after creating a new tab
+      await pages[i].close();
+    }
     await ensureLoggedIn();
   } catch (error) {
     console.error("Failed to launch browser:", error);
